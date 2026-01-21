@@ -1,0 +1,55 @@
+# nginx proxy address - http://172.17.0.1:8070
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "5m"
+    max-file: "1"
+
+services:
+  erpnext:
+    image: frappe/erpnext:latest
+    container_name: erpnext-app
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - erpnext
+    ports:
+      - "8070:8000"
+    environment:
+      TZ: ${TZ:-America/New_York}
+    volumes:
+      - ./rootfs/data/erpnext:/data
+      - ./rootfs/config/erpnext:/config
+    depends_on:
+      - erpnext-db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  erpnext-db:
+    image: mariadb:11
+    container_name: erpnext-db
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - erpnext
+    environment:
+      TZ: ${TZ:-America/New_York}
+      MARIADB_DATABASE: ${DB_CREATE_DATABASE_NAME:-erpnext}
+      MARIADB_USER: ${DB_USER_NAME:-erpnext}
+      MARIADB_PASSWORD: ${DB_USER_PASS:-changeme_db_password}
+      MARIADB_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_root_password}
+    volumes:
+      - ./rootfs/db/mariadb/erpnext:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  erpnext:
+    external: false
