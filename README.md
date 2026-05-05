@@ -50,9 +50,9 @@ See `docker-compose.yaml` for complete list of configurable options.
 
 ## 📂 Volumes
 
-- `./rootfs/data/erpnext` - Data storage
-- `./rootfs/config/erpnext` - Data storage
-- `./rootfs/data/db/mariadb/erpnext` - Data storage
+- `./volumes/data/erpnext` - Data storage
+- `./volumes/config/erpnext` - Data storage
+- `./volumes/data/db/mariadb/erpnext` - Data storage
 
 ## 🔐 Security
 
