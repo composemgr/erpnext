@@ -1,4 +1,8 @@
 # nginx proxy address - http://172.17.0.1:8070
+# NOTE: frappe/erpnext requires a multi-service architecture.
+# This compose follows the official frappe_docker pwd.yml structure.
+# On first run, the create-site service provisions the initial site.
+# Admin password is set via DB_ADMIN_PASS; site name defaults to frontend.
 
 name: erpnext
 x-logging: &default-logging
@@ -7,34 +11,47 @@ x-logging: &default-logging
     max-size: "5m"
     max-file: "1"
 
+x-erpnext-image: &erpnext-image
+  image: frappe/erpnext:latest
+  pull_policy: always
+
+x-erpnext-volumes: &erpnext-volumes
+  volumes:
+    - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
+    - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
+
 services:
-  erpnext:
-    image: frappe/erpnext:latest
-    pull_policy: always
+  frontend:
+    <<: *erpnext-image
     container_name: erpnext-app
     restart: always
     logging: *default-logging
+    command:
+      - nginx-entrypoint.sh
+    environment:
+      TZ: ${TZ:-America/New_York}
+      BACKEND: backend:8000
+      FRAPPE_SITE_NAME_HEADER: ${BASE_HOST_NAME:-frontend}
+      SOCKETIO: websocket:9000
+      UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: 120
+      CLIENT_MAX_BODY_SIZE: 50m
+      CONTAINER_NAME: erpnext-app
+    volumes:
+      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
+      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
+    ports:
+      - "172.17.0.1:8070:8080"
+    depends_on:
+      - websocket
     networks:
       - erpnext
       - proxy
       - cloudflare
-    ports:
-      - "172.17.0.1:8070:8000"
-    environment:
-      TZ: ${TZ:-America/New_York}
-      FRAPPE_SITE_NAME_HEADER: ${BASE_HOST_NAME:-localhost}
-      DB_HOST: erpnext-db
-      DB_PORT: 3306
-      MYSQL_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_admin_password}
-      CONTAINER_NAME: erpnext-app
-      HOSTNAME: ${BASE_HOST_NAME:-$HOSTNAME}
-    volumes:
-      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
-      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
-    depends_on:
-      - erpnext-db
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -42,7 +59,7 @@ services:
       - 'traefik.enable=true'
       - 'cloudflare.enable=true'
       - 'traefik.docker.network=proxy'
-      - 'cloudflare.service=http://erpnext-app:8000'
+      - 'cloudflare.service=http://erpnext-app:8080'
       - 'cloudflare.hostname=erpnext.${CLOUDFLARE_ZONE_NAME:-}'
       - 'traefik.http.routers.erpnext-app.entrypoints=http'
       - 'traefik.http.routers.erpnext-app-secure.tls=true'
@@ -53,7 +70,195 @@ services:
       - 'traefik.http.routers.erpnext-app-secure.rule=Host($(${BASE_HOST_NAME:-$HOSTNAME}))'
       - 'traefik.http.routers.erpnext-app-secure.tls.certresolver=cloudflare'
       - 'traefik.http.routers.erpnext-app-secure.service=erpnext-app'
-      - 'traefik.http.services.erpnext-app.loadbalancer.server.port=8000'
+      - 'traefik.http.services.erpnext-app.loadbalancer.server.port=8080'
+
+  backend:
+    <<: *erpnext-image
+    container_name: erpnext-backend
+    restart: always
+    logging: *default-logging
+    environment:
+      TZ: ${TZ:-America/New_York}
+      DB_HOST: erpnext-db
+      DB_PORT: "3306"
+      MYSQL_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_admin_password}
+      MARIADB_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_admin_password}
+      CONTAINER_NAME: erpnext-backend
+    volumes:
+      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
+      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext
+    depends_on:
+      - erpnext-db
+      - redis-cache
+      - redis-queue
+
+  configurator:
+    <<: *erpnext-image
+    container_name: erpnext-configurator
+    restart: "no"
+    logging: *default-logging
+    entrypoint:
+      - bash
+      - -c
+    command:
+      - >
+        ls -1 apps > sites/apps.txt;
+        bench set-config -g db_host $$DB_HOST;
+        bench set-config -gp db_port $$DB_PORT;
+        bench set-config -g redis_cache "redis://$$REDIS_CACHE";
+        bench set-config -g redis_queue "redis://$$REDIS_QUEUE";
+        bench set-config -g redis_socketio "redis://$$REDIS_QUEUE";
+        bench set-config -gp socketio_port $$SOCKETIO_PORT;
+    environment:
+      TZ: ${TZ:-America/New_York}
+      DB_HOST: erpnext-db
+      DB_PORT: "3306"
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      SOCKETIO_PORT: "9000"
+      CONTAINER_NAME: erpnext-configurator
+    volumes:
+      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
+      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext
+    depends_on:
+      - erpnext-db
+      - redis-cache
+      - redis-queue
+
+  create-site:
+    <<: *erpnext-image
+    container_name: erpnext-create-site
+    restart: "no"
+    logging: *default-logging
+    entrypoint:
+      - bash
+      - -c
+    command:
+      - >
+        wait-for-it -t 120 erpnext-db:3306;
+        wait-for-it -t 120 redis-cache:6379;
+        wait-for-it -t 120 redis-queue:6379;
+        export start=`date +%s`;
+        until [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".db_host // empty"` ]] &&
+          [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_cache // empty"` ]] &&
+          [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_queue // empty"` ]];
+        do
+          echo "Waiting for sites/common_site_config.json";
+          sleep 5;
+          if (( `date +%s`-start > 120 )); then
+            echo "could not find sites/common_site_config.json with required keys";
+            exit 1
+          fi
+        done;
+        bench new-site --mariadb-user-host-login-scope='%'
+          --admin-password=${DB_ADMIN_PASS:-changeme_admin_password}
+          --db-root-username=root
+          --db-root-password=${DB_ADMIN_PASS:-changeme_admin_password}
+          --install-app erpnext
+          --set-default ${BASE_HOST_NAME:-frontend};
+    environment:
+      TZ: ${TZ:-America/New_York}
+      CONTAINER_NAME: erpnext-create-site
+    volumes:
+      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
+      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext
+    depends_on:
+      - erpnext-db
+      - configurator
+
+  websocket:
+    <<: *erpnext-image
+    container_name: erpnext-websocket
+    restart: always
+    logging: *default-logging
+    command:
+      - node
+      - /home/frappe/frappe-bench/apps/frappe/socketio.js
+    environment:
+      TZ: ${TZ:-America/New_York}
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+      CONTAINER_NAME: erpnext-websocket
+    volumes:
+      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
+      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext
+    depends_on:
+      - redis-cache
+      - redis-queue
+
+  queue-long:
+    <<: *erpnext-image
+    container_name: erpnext-queue-long
+    restart: always
+    logging: *default-logging
+    command:
+      - bench
+      - worker
+      - --queue
+      - long,default,short
+    environment:
+      TZ: ${TZ:-America/New_York}
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+      CONTAINER_NAME: erpnext-queue-long
+    volumes:
+      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
+      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext
+    depends_on:
+      - redis-queue
+
+  queue-short:
+    <<: *erpnext-image
+    container_name: erpnext-queue-short
+    restart: always
+    logging: *default-logging
+    command:
+      - bench
+      - worker
+      - --queue
+      - short,default
+    environment:
+      TZ: ${TZ:-America/New_York}
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+      CONTAINER_NAME: erpnext-queue-short
+    volumes:
+      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
+      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext
+    depends_on:
+      - redis-queue
+
+  scheduler:
+    <<: *erpnext-image
+    container_name: erpnext-scheduler
+    restart: always
+    logging: *default-logging
+    command:
+      - bench
+      - schedule
+    environment:
+      TZ: ${TZ:-America/New_York}
+      CONTAINER_NAME: erpnext-scheduler
+    volumes:
+      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
+      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext
+    depends_on:
+      - erpnext-db
+      - redis-queue
 
   erpnext-db:
     image: mariadb:latest
@@ -63,12 +268,14 @@ services:
     logging: *default-logging
     networks:
       - erpnext
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --skip-character-set-client-handshake --skip-innodb-read-only-compressed
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --skip-innodb-read-only-compressed
     environment:
       TZ: ${TZ:-America/New_York}
-      MARIADB_DATABASE: ${DB_CREATE_DATABASE_NAME:-erpnext}
-      MARIADB_USER: ${DB_USER_NAME:-erpnext}
-      MARIADB_PASSWORD: ${DB_USER_PASS:-changeme_db_password}
+      MYSQL_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_admin_password}
       MARIADB_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_admin_password}
       CONTAINER_NAME: erpnext-db
     volumes:
@@ -78,6 +285,26 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  redis-cache:
+    image: redis:alpine
+    pull_policy: always
+    container_name: erpnext-redis-cache
+    restart: always
+    logging: *default-logging
+    networks:
+      - erpnext
+
+  redis-queue:
+    image: redis:alpine
+    pull_policy: always
+    container_name: erpnext-redis-queue
+    restart: always
+    logging: *default-logging
+    networks:
+      - erpnext
+    volumes:
+      - ./volumes/data/redis/erpnext-queue:/data
 
 networks:
   erpnext:
