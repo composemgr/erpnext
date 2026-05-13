@@ -16,6 +16,8 @@ services:
     logging: *default-logging
     networks:
       - erpnext
+      - proxy
+      - cloudflare
     ports:
       - "172.17.0.1:8070:8000"
     environment:
@@ -24,6 +26,8 @@ services:
       DB_HOST: erpnext-db
       DB_PORT: 3306
       MYSQL_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_admin_password}
+      CONTAINER_NAME: erpnext-app
+      HOSTNAME: ${BASE_HOST_NAME:-$HOSTNAME}
     volumes:
       - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
       - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
@@ -34,6 +38,22 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    labels:
+      - 'traefik.enable=true'
+      - 'cloudflare.enable=true'
+      - 'traefik.docker.network=proxy'
+      - 'cloudflare.service=http://erpnext-app:8000'
+      - 'cloudflare.hostname=erpnext.${CLOUDFLARE_ZONE_NAME:-}'
+      - 'traefik.http.routers.erpnext-app.entrypoints=http'
+      - 'traefik.http.routers.erpnext-app-secure.tls=true'
+      - 'traefik.http.routers.erpnext-app.rule=Host($(${BASE_HOST_NAME:-$HOSTNAME}))'
+      - 'traefik.http.middlewares.erpnext-app-https-redirect.redirectscheme.scheme=https'
+      - 'traefik.http.routers.erpnext-app.middlewares=erpnext-app-https-redirect'
+      - 'traefik.http.routers.erpnext-app-secure.entrypoints=https'
+      - 'traefik.http.routers.erpnext-app-secure.rule=Host($(${BASE_HOST_NAME:-$HOSTNAME}))'
+      - 'traefik.http.routers.erpnext-app-secure.tls.certresolver=cloudflare'
+      - 'traefik.http.routers.erpnext-app-secure.service=erpnext-app'
+      - 'traefik.http.services.erpnext-app.loadbalancer.server.port=8000'
 
   erpnext-db:
     image: mariadb:latest
@@ -50,6 +70,7 @@ services:
       MARIADB_USER: ${DB_USER_NAME:-erpnext}
       MARIADB_PASSWORD: ${DB_USER_PASS:-changeme_db_password}
       MARIADB_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_admin_password}
+      CONTAINER_NAME: erpnext-db
     volumes:
       - ./volumes/data/db/mariadb/erpnext:/var/lib/mysql
     healthcheck:
@@ -62,3 +83,7 @@ networks:
   erpnext:
     name: erpnext
     external: false
+  proxy:
+    external: true
+  cloudflare:
+    external: true
