@@ -1,103 +1,83 @@
-# nginx proxy address - http://172.17.0.1:8070
-# NOTE: frappe/erpnext requires a multi-service architecture.
-# This compose follows the official frappe_docker pwd.yml structure.
-# On first run, the create-site service provisions the initial site.
-# Admin password is set via DB_ADMIN_PASS; site name defaults to frontend.
+# nginx proxy address - http://172.17.0.1:64166
 
 name: erpnext
 x-logging: &default-logging
-  driver: json-file
   options:
-    max-size: "5m"
-    max-file: "1"
+    max-size: '5m'
+    max-file: '1'
+  driver: json-file
 
 x-erpnext-image: &erpnext-image
   image: frappe/erpnext:latest
   pull_policy: always
 
-x-erpnext-volumes: &erpnext-volumes
-  volumes:
-    - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
-    - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
-
 services:
   frontend:
     <<: *erpnext-image
     container_name: erpnext-app
+    domainname: ${BASE_DOMAIN_NAME:-example.com}
+    hostname: ${BASE_HOST_NAME:-$HOSTNAME}
     restart: always
     logging: *default-logging
     command:
       - nginx-entrypoint.sh
     environment:
       TZ: ${TZ:-America/New_York}
+      CONTAINER_NAME: erpnext-app
+      HOSTNAME: ${BASE_HOST_NAME:-$HOSTNAME}
       BACKEND: backend:8000
-      FRAPPE_SITE_NAME_HEADER: ${BASE_HOST_NAME:-frontend}
+      FRAPPE_SITE_NAME_HEADER: ${BASE_HOST_NAME:-$HOSTNAME}
       SOCKETIO: websocket:9000
       UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
       UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
-      UPSTREAM_REAL_IP_RECURSIVE: "off"
-      PROXY_READ_TIMEOUT: 120
+      UPSTREAM_REAL_IP_RECURSIVE: 'off'
+      PROXY_READ_TIMEOUT: '120'
       CLIENT_MAX_BODY_SIZE: 50m
-      CONTAINER_NAME: erpnext-app
     volumes:
-      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
-      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
+      - './volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites'
+      - './volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs'
     ports:
-      - "172.17.0.1:8070:8080"
+      - '172.17.0.1:64166:8080'
     depends_on:
       - websocket
-    networks:
-      - erpnext
-      - proxy
-      - cloudflare
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080']
       interval: 30s
       timeout: 10s
       retries: 3
-    labels:
-      - 'traefik.enable=true'
-      - 'cloudflare.enable=true'
-      - 'traefik.docker.network=proxy'
-      - 'cloudflare.service=http://erpnext-app:8080'
-      - 'cloudflare.hostname=erpnext.${CLOUDFLARE_ZONE_NAME:-}'
-      - 'traefik.http.routers.erpnext-app.entrypoints=http'
-      - 'traefik.http.routers.erpnext-app-secure.tls=true'
-      - 'traefik.http.routers.erpnext-app.rule=Host($(${BASE_HOST_NAME:-$HOSTNAME}))'
-      - 'traefik.http.middlewares.erpnext-app-https-redirect.redirectscheme.scheme=https'
-      - 'traefik.http.routers.erpnext-app.middlewares=erpnext-app-https-redirect'
-      - 'traefik.http.routers.erpnext-app-secure.entrypoints=https'
-      - 'traefik.http.routers.erpnext-app-secure.rule=Host($(${BASE_HOST_NAME:-$HOSTNAME}))'
-      - 'traefik.http.routers.erpnext-app-secure.tls.certresolver=cloudflare'
-      - 'traefik.http.routers.erpnext-app-secure.service=erpnext-app'
-      - 'traefik.http.services.erpnext-app.loadbalancer.server.port=8080'
+    networks:
+      - erpnext
 
   backend:
     <<: *erpnext-image
     container_name: erpnext-backend
+    domainname: ${BASE_DOMAIN_NAME:-example.com}
+    hostname: ${BASE_HOST_NAME:-$HOSTNAME}
     restart: always
     logging: *default-logging
     environment:
       TZ: ${TZ:-America/New_York}
-      DB_HOST: erpnext-db
-      DB_PORT: "3306"
-      MYSQL_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_admin_password}
-      MARIADB_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_admin_password}
       CONTAINER_NAME: erpnext-backend
+      DB_HOST: db
+      DB_PORT: '3306'
+      MYSQL_ROOT_PASSWORD: ${DB_ADMIN_PASS:-replace-with-a-random-password}
+      MARIADB_ROOT_PASSWORD: ${DB_ADMIN_PASS:-replace-with-a-random-password}
     volumes:
-      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
-      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
-    networks:
-      - erpnext
+      - './volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites'
+      - './volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs'
     depends_on:
-      - erpnext-db
+      - db
       - redis-cache
       - redis-queue
+    networks:
+      - erpnext
 
   configurator:
     <<: *erpnext-image
     container_name: erpnext-configurator
-    restart: "no"
+    domainname: ${BASE_DOMAIN_NAME:-example.com}
+    hostname: ${BASE_HOST_NAME:-$HOSTNAME}
+    restart: 'no'
     logging: *default-logging
     entrypoint:
       - bash
@@ -113,33 +93,35 @@ services:
         bench set-config -gp socketio_port $$SOCKETIO_PORT;
     environment:
       TZ: ${TZ:-America/New_York}
-      DB_HOST: erpnext-db
-      DB_PORT: "3306"
+      CONTAINER_NAME: erpnext-configurator
+      DB_HOST: db
+      DB_PORT: '3306'
       REDIS_CACHE: redis-cache:6379
       REDIS_QUEUE: redis-queue:6379
-      SOCKETIO_PORT: "9000"
-      CONTAINER_NAME: erpnext-configurator
+      SOCKETIO_PORT: '9000'
     volumes:
-      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
-      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
-    networks:
-      - erpnext
+      - './volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites'
+      - './volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs'
     depends_on:
-      - erpnext-db
+      - db
       - redis-cache
       - redis-queue
+    networks:
+      - erpnext
 
   create-site:
     <<: *erpnext-image
     container_name: erpnext-create-site
-    restart: "no"
+    domainname: ${BASE_DOMAIN_NAME:-example.com}
+    hostname: ${BASE_HOST_NAME:-$HOSTNAME}
+    restart: 'no'
     logging: *default-logging
     entrypoint:
       - bash
       - -c
     command:
       - >
-        wait-for-it -t 120 erpnext-db:3306;
+        wait-for-it -t 120 db:3306;
         wait-for-it -t 120 redis-cache:6379;
         wait-for-it -t 120 redis-queue:6379;
         export start=`date +%s`;
@@ -155,26 +137,29 @@ services:
           fi
         done;
         bench new-site --mariadb-user-host-login-scope='%'
-          --admin-password=${DB_ADMIN_PASS:-changeme_admin_password}
+          --admin-password=${DB_ADMIN_PASS:-replace-with-a-random-password}
           --db-root-username=root
-          --db-root-password=${DB_ADMIN_PASS:-changeme_admin_password}
+          --db-root-password=${DB_ADMIN_PASS:-replace-with-a-random-password}
           --install-app erpnext
-          --set-default ${BASE_HOST_NAME:-frontend};
+          --set-default ${BASE_HOST_NAME:-$HOSTNAME};
     environment:
       TZ: ${TZ:-America/New_York}
       CONTAINER_NAME: erpnext-create-site
+      DB_ADMIN_PASS: ${DB_ADMIN_PASS:-replace-with-a-random-password}
     volumes:
-      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
-      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
+      - './volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites'
+      - './volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs'
+    depends_on:
+      - db
+      - configurator
     networks:
       - erpnext
-    depends_on:
-      - erpnext-db
-      - configurator
 
   websocket:
     <<: *erpnext-image
     container_name: erpnext-websocket
+    domainname: ${BASE_DOMAIN_NAME:-example.com}
+    hostname: ${BASE_HOST_NAME:-$HOSTNAME}
     restart: always
     logging: *default-logging
     command:
@@ -182,21 +167,23 @@ services:
       - /home/frappe/frappe-bench/apps/frappe/socketio.js
     environment:
       TZ: ${TZ:-America/New_York}
+      CONTAINER_NAME: erpnext-websocket
       FRAPPE_REDIS_CACHE: redis://redis-cache:6379
       FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
-      CONTAINER_NAME: erpnext-websocket
     volumes:
-      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
-      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
-    networks:
-      - erpnext
+      - './volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites'
+      - './volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs'
     depends_on:
       - redis-cache
       - redis-queue
+    networks:
+      - erpnext
 
   queue-long:
     <<: *erpnext-image
     container_name: erpnext-queue-long
+    domainname: ${BASE_DOMAIN_NAME:-example.com}
+    hostname: ${BASE_HOST_NAME:-$HOSTNAME}
     restart: always
     logging: *default-logging
     command:
@@ -206,20 +193,22 @@ services:
       - long,default,short
     environment:
       TZ: ${TZ:-America/New_York}
+      CONTAINER_NAME: erpnext-queue-long
       FRAPPE_REDIS_CACHE: redis://redis-cache:6379
       FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
-      CONTAINER_NAME: erpnext-queue-long
     volumes:
-      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
-      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
-    networks:
-      - erpnext
+      - './volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites'
+      - './volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs'
     depends_on:
       - redis-queue
+    networks:
+      - erpnext
 
   queue-short:
     <<: *erpnext-image
     container_name: erpnext-queue-short
+    domainname: ${BASE_DOMAIN_NAME:-example.com}
+    hostname: ${BASE_HOST_NAME:-$HOSTNAME}
     restart: always
     logging: *default-logging
     command:
@@ -229,20 +218,22 @@ services:
       - short,default
     environment:
       TZ: ${TZ:-America/New_York}
+      CONTAINER_NAME: erpnext-queue-short
       FRAPPE_REDIS_CACHE: redis://redis-cache:6379
       FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
-      CONTAINER_NAME: erpnext-queue-short
     volumes:
-      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
-      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
-    networks:
-      - erpnext
+      - './volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites'
+      - './volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs'
     depends_on:
       - redis-queue
+    networks:
+      - erpnext
 
   scheduler:
     <<: *erpnext-image
     container_name: erpnext-scheduler
+    domainname: ${BASE_DOMAIN_NAME:-example.com}
+    hostname: ${BASE_HOST_NAME:-$HOSTNAME}
     restart: always
     logging: *default-logging
     command:
@@ -252,22 +243,22 @@ services:
       TZ: ${TZ:-America/New_York}
       CONTAINER_NAME: erpnext-scheduler
     volumes:
-      - ./volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites
-      - ./volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs
-    networks:
-      - erpnext
+      - './volumes/data/erpnext/sites:/home/frappe/frappe-bench/sites'
+      - './volumes/data/erpnext/logs:/home/frappe/frappe-bench/logs'
     depends_on:
-      - erpnext-db
+      - db
       - redis-queue
-
-  erpnext-db:
-    image: mariadb:latest
-    pull_policy: always
-    container_name: erpnext-db
-    restart: always
-    logging: *default-logging
     networks:
       - erpnext
+
+  db:
+    image: mariadb:latest
+    container_name: erpnext-db
+    domainname: ${BASE_DOMAIN_NAME:-example.com}
+    hostname: erpnext-db
+    restart: always
+    pull_policy: always
+    logging: *default-logging
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
@@ -275,42 +266,50 @@ services:
       - --skip-innodb-read-only-compressed
     environment:
       TZ: ${TZ:-America/New_York}
-      MYSQL_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_admin_password}
-      MARIADB_ROOT_PASSWORD: ${DB_ADMIN_PASS:-changeme_admin_password}
       CONTAINER_NAME: erpnext-db
+      MYSQL_ROOT_PASSWORD: ${DB_ADMIN_PASS:-replace-with-a-random-password}
+      MARIADB_ROOT_PASSWORD: ${DB_ADMIN_PASS:-replace-with-a-random-password}
     volumes:
-      - ./volumes/data/db/mariadb/erpnext:/var/lib/mysql
+      - './volumes/db/mariadb/erpnext:/var/lib/mysql:z'
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - erpnext
 
   redis-cache:
     image: redis:alpine
-    pull_policy: always
     container_name: erpnext-redis-cache
+    domainname: ${BASE_DOMAIN_NAME:-example.com}
+    hostname: erpnext-redis-cache
     restart: always
+    pull_policy: always
     logging: *default-logging
+    environment:
+      TZ: ${TZ:-America/New_York}
+      CONTAINER_NAME: erpnext-redis-cache
     networks:
       - erpnext
 
   redis-queue:
     image: redis:alpine
-    pull_policy: always
     container_name: erpnext-redis-queue
+    domainname: ${BASE_DOMAIN_NAME:-example.com}
+    hostname: erpnext-redis-queue
     restart: always
+    pull_policy: always
     logging: *default-logging
+    environment:
+      TZ: ${TZ:-America/New_York}
+      CONTAINER_NAME: erpnext-redis-queue
+    volumes:
+      - './volumes/data/redis/erpnext-queue:/data:z'
     networks:
       - erpnext
-    volumes:
-      - ./volumes/data/redis/erpnext-queue:/data
 
 networks:
   erpnext:
     name: erpnext
     external: false
-  proxy:
-    external: true
-  cloudflare:
-    external: true
